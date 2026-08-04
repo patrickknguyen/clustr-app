@@ -51,10 +51,13 @@ export function groupAndLabel(
   // No well-separated structure: one board-level descriptor.
   if (best.k < 2 || best.score < QUALITY_THRESHOLD) {
     const centroid = meanVector(items.map((i) => i.embedding));
-    const scored = vocab.map((v) => ({ word: v.word, score: dot(centroid, v.vec) }));
-    const words = pickTags(scored, vocabMap, maxTags, TAG_MARGIN);
+    const boardTags = boardTheme([centroid], vocab, vocabMap, maxTags);
+    const isBoardWord = boardExcluder(boardTags, vocabMap);
+    const base = vocab.map((v) => ({ word: v.word, score: dot(centroid, v.vec) }));
+    const scored = base.filter((x) => !isBoardWord(x.word));
+    const words = pickTags(scored.length ? scored : base, vocabMap, maxTags, TAG_MARGIN);
     const clusters = [{ memberIds: items.map((i) => i.id), tags: placeTags(words, items, vocabMap) }];
-    return { clusters, boardTags: boardTheme([centroid], vocab, vocabMap, maxTags) };
+    return { clusters, boardTags };
   }
 
   const groups: Item[][] = Array.from({ length: best.k }, () => []);
@@ -65,20 +68,30 @@ export function groupAndLabel(
   const sims = centroids.map((c) => vocab.map((v) => dot(c, v.vec)));
   const wordMean = vocab.map((_, j) => sims.reduce((a, row) => a + row[j], 0) / sims.length);
 
+  // Board theme first, so cluster tags can exclude it: a word that describes the
+  // whole board (e.g. "summer") belongs on the board, not repeated on a cluster.
+  // Distinctiveness alone demotes such words but doesn't guarantee their removal —
+  // a universal word can still top the cluster where it happens to peak.
+  const boardTags = boardTheme(centroids, vocab, vocabMap, maxTags);
+  const isBoardWord = boardExcluder(boardTags, vocabMap);
+
   const clusters = grouped.map((members, ci) => {
     // Only consider words that actually match this cluster well (a floor relative
     // to its best match), THEN rank by distinctiveness. Without this, on a
     // homogeneous board distinctiveness surfaces words that match by chance
     // ("abyssinian") over accurate-but-common ones ("minimal", "home decor").
     const floor = Math.max(...sims[ci]) * MATCH_FLOOR;
-    const scored = vocab
+    const base = vocab
       .map((v, j) => ({ word: v.word, score: sims[ci][j] - wordMean[j], raw: sims[ci][j] }))
       .filter((x) => x.raw >= floor);
-    const words = pickTags(scored, vocabMap, maxTags, TAG_MARGIN);
+    // Drop board-level words; fall back to the unfiltered set if that empties it,
+    // so a cluster never ends up with no tag at all.
+    const scored = base.filter((x) => !isBoardWord(x.word));
+    const words = pickTags(scored.length ? scored : base, vocabMap, maxTags, TAG_MARGIN);
     return { memberIds: members.map((m) => m.id), tags: placeTags(words, members, vocabMap) };
   });
 
-  return { clusters, boardTags: boardTheme(centroids, vocab, vocabMap, maxTags) };
+  return { clusters, boardTags };
 }
 
 /**
@@ -104,6 +117,27 @@ function boardTheme(
   const topScore = Math.max(...scored.map((s) => s.score));
   if (!Number.isFinite(topScore) || topScore < BOARD_THRESHOLD) return [];
   return pickTags(scored, vocabMap, maxTags, BOARD_MARGIN);
+}
+
+/**
+ * Predicate for words to keep off cluster tags: the board-theme words themselves
+ * plus any near-synonym of one (so "summer" excludes "summertime" too), reusing
+ * the same similarity cutoff pickTags uses to dedupe synonyms.
+ */
+function boardExcluder(
+  boardTags: string[],
+  vocabMap: Map<string, Float32Array>,
+): (word: string) => boolean {
+  const set = new Set(boardTags);
+  const vecs = boardTags
+    .map((w) => vocabMap.get(w))
+    .filter((v): v is Float32Array => v !== undefined);
+  return (word) => {
+    if (set.has(word)) return true;
+    const wv = vocabMap.get(word);
+    if (!wv) return false;
+    return vecs.some((bv) => dot(wv, bv) > SYNONYM_MAX_SIM);
+  };
 }
 
 /**
