@@ -24,7 +24,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # Use `npm install`, not `npm ci`: sharp/onnxruntime pull in
+      # platform-gated optional deps (@emnapi/*) that a macOS-generated
+      # lockfile omits, which makes the strict `npm ci` check fail on Linux.
+      - run: npm install --no-audit --no-fund
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
