@@ -1,0 +1,3 @@
+# Offline helper for downloading Pinterest reference images.
+# Install into an isolated venv (see scripts/README.md).
+pinterest-dl>=1.3,<2
