@@ -1,16 +1,12 @@
 import { useRef } from 'react';
 import { useStore } from '../store';
+import { embedder } from '../lib/embedder';
 
 export function Toolbar() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const images = useStore((s) => s.images);
   const addFiles = useStore((s) => s.addFiles);
-  const clearAll = useStore((s) => s.clearAll);
   const boardName = useStore((s) => s.boardName);
   const setBoardName = useStore((s) => s.setBoardName);
-
-  const total = images.length;
-  const ready = images.filter((i) => i.status === 'ready').length;
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
@@ -37,12 +33,6 @@ export function Toolbar() {
       </div>
 
       <div className="toolbar-actions">
-        {total > 0 && (
-          <span className="counter">
-            {ready < total ? `embedding ${ready}/${total}` : `${total} ready`}
-          </span>
-        )}
-
         <input
           ref={inputRef}
           type="file"
@@ -51,14 +41,13 @@ export function Toolbar() {
           hidden
           onChange={onPick}
         />
-        <button className="btn" onClick={() => inputRef.current?.click()}>
+        <button
+          className="btn"
+          onMouseEnter={() => embedder.warm()} // likely about to upload — preload the model
+          onClick={() => inputRef.current?.click()}
+        >
           Add images
         </button>
-        {total > 0 && (
-          <button className="btn ghost" onClick={clearAll}>
-            Clear
-          </button>
-        )}
       </div>
     </div>
   );

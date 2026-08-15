@@ -6,9 +6,11 @@
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 type WorkerMessage =
-  | { type: 'result'; id: string; embedding: Float32Array }
+  | { type: 'result'; id: string; embedding: Float32Array; dino: Float32Array }
   | { type: 'textResult'; id: string; embeddings: Float32Array[] }
   | { type: 'error'; id: string; message: string };
+
+export type ImageVectors = { clip: Float32Array; dino: Float32Array };
 
 class Embedder {
   private worker: Worker;
@@ -25,13 +27,23 @@ class Embedder {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
-      if (msg.type === 'result') p.resolve(msg.embedding);
+      if (msg.type === 'result') p.resolve({ clip: msg.embedding, dino: msg.dino });
       else if (msg.type === 'textResult') p.resolve(msg.embeddings);
       else p.reject(new Error(msg.message));
     };
   }
 
-  embed(id: string, blob: Blob): Promise<Float32Array> {
+  private warmed = false;
+
+  /** Kick off the model download + init ahead of the first upload (idempotent), so the
+   *  cold start overlaps with the user choosing files rather than blocking afterward. */
+  warm(): void {
+    if (this.warmed) return;
+    this.warmed = true;
+    this.worker.postMessage({ type: 'warm' });
+  }
+
+  embed(id: string, blob: Blob): Promise<ImageVectors> {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.worker.postMessage({ type: 'embed', id, blob });

@@ -19,6 +19,12 @@ scraped/
 # Raw sample-board sources (large; only the processed public/samples is shipped)
 samples-src/
 
+# Personal working files (notes, data) — not shared
+/private/
+
+# Throwaway experiments & diagnostics coupled to the repo (need its imports; safe to delete)
+/scratch/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

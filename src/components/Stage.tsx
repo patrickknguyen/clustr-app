@@ -4,10 +4,10 @@ import { useStore } from '../store';
 import { useElementSize } from '../hooks/useElementSize';
 import { fitToBox } from '../lib/layout';
 
-const CELL = 120; // base element size (px)
+const CELL = 150; // base element size (px) — ~8 images per row in the library
 const GAP = 12;
 const PAD = 16;
-const CLUSTER_SCALE = 0.6; // cluster thumbs are smaller than grid cells
+const CLUSTER_SCALE = 0.5; // cluster thumbs are smaller (CELL*0.4 ≈ the old 72px)
 const CHIP_MIN_DIST = 48; // min gap between a cluster's tag chips (px)
 
 /**
@@ -130,7 +130,7 @@ export function Stage() {
     return (
       <div className="stage-scroll fit" ref={ref}>
         <div className="empty">
-          Drop images here, or use “Add images”. Then press “Cluster”.
+          Drop images here, or use “Add images”. Then open the “Map”.
         </div>
       </div>
     );
@@ -171,16 +171,15 @@ export function Stage() {
               style={{ width: CELL, height: CELL }}
               initial={false}
               animate={{ x, y, scale, opacity }}
-              transition={{
-                duration: 0.9,
-                ease: [0.16, 1, 0.3, 1],
-                opacity: { duration: 0.2 },
-              }}
+              transition={
+                // Animate the grid↔map morph and the in-map reflow; but in the grid,
+                // reposition instantly so resizing the window doesn't slide the images.
+                isCluster
+                  ? { duration: 0.9, ease: [0.16, 1, 0.3, 1], opacity: { duration: 0.2 } }
+                  : { duration: 0, opacity: { duration: 0.2 } }
+              }
             >
               <img src={img.url} alt="" draggable={false} />
-              {!isCluster && img.status !== 'ready' && (
-                <span className="thumb-pending" title="embedding…" />
-              )}
               {!isCluster && (
                 <button
                   className="thumb-x"
@@ -213,7 +212,7 @@ export function Stage() {
               }}
               transition={{ duration: 0.15 }}
             >
-              {l.words.join(' · ')}
+              {l.words.join(' | ')}
             </motion.div>
           </motion.div>
         ))}

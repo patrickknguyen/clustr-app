@@ -4,7 +4,10 @@ export function TabBar() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const showClusters = useStore((s) => s.showClusters);
-  const isClustering = useStore((s) => s.isClustering);
+  // "Mapping…" spans the whole upload → embed → cluster process.
+  const isBusy = useStore(
+    (s) => s.isClustering || s.images.some((i) => i.status === 'pending'),
+  );
   const readyCount = useStore(
     (s) => s.images.filter((i) => i.status === 'ready' && i.embedding).length,
   );
@@ -26,7 +29,7 @@ export function TabBar() {
         disabled={readyCount < 2}
         onClick={() => showClusters()}
       >
-        {isClustering ? 'Clustering…' : 'Clusters'}
+        {isBusy ? 'Mapping…' : 'Map'}
       </button>
     </div>
   );

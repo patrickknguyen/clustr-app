@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import {
+  AutoModel,
   AutoProcessor,
   AutoTokenizer,
   CLIPVisionModelWithProjection,
@@ -7,23 +8,32 @@ import {
   RawImage,
 } from '@huggingface/transformers';
 
-// Small, fast CLIP. Vision tower for images, text tower for zero-shot labels.
+// Small, fast CLIP (semantic) + DINOv2-small (visual). CLIP vision + text towers for
+// image embeddings and zero-shot labels; DINO CLS token for the "by look" axis.
 const MODEL_ID = 'Xenova/clip-vit-base-patch32';
+const DINO_ID = 'Xenova/dinov2-small';
 
 type EmbedRequest = { type: 'embed'; id: string; blob: Blob };
 type EmbedTextRequest = { type: 'embedText'; id: string; texts: string[] };
-type Request = EmbedRequest | EmbedTextRequest;
+type WarmRequest = { type: 'warm' };
+type Request = EmbedRequest | EmbedTextRequest | WarmRequest;
 
 let processorPromise: Promise<unknown> | null = null;
 let visionPromise: Promise<unknown> | null = null;
 let tokenizerPromise: Promise<unknown> | null = null;
 let textPromise: Promise<unknown> | null = null;
+let dinoProcessorPromise: Promise<unknown> | null = null;
+let dinoPromise: Promise<unknown> | null = null;
 
-async function withFallback<T>(load: (device: 'webgpu' | 'wasm', dtype: 'fp32' | 'q8') => Promise<T>) {
+// fp32 (lossless). We measured q8 at ~0.89–0.93 cosine vs fp32 on the same image — a real
+// shift, not negligible — and it would mismatch the fp32 sample embeddings; the idle-warm
+// prefetch already hides the download, so there's nothing to buy by quantizing. Prefer
+// WebGPU, fall back to wasm if it's unavailable.
+async function withFallback<T>(load: (device: 'webgpu' | 'wasm', dtype: 'fp32') => Promise<T>) {
   try {
     return await load('webgpu', 'fp32');
   } catch {
-    return await load('wasm', 'q8');
+    return await load('wasm', 'fp32');
   }
 }
 
@@ -51,6 +61,16 @@ async function getText() {
   return { tokenizer: tokenizer as any, model: model as any };
 }
 
+async function getDino() {
+  if (!dinoProcessorPromise) dinoProcessorPromise = AutoProcessor.from_pretrained(DINO_ID);
+  if (!dinoPromise) {
+    dinoPromise = withFallback((device, dtype) => AutoModel.from_pretrained(DINO_ID, { device, dtype }));
+  }
+  const [processor, model] = await Promise.all([dinoProcessorPromise, dinoPromise]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { processor: processor as any, model: model as any };
+}
+
 function l2normalize(v: Float32Array): Float32Array {
   let sum = 0;
   for (let i = 0; i < v.length; i++) sum += v[i] * v[i];
@@ -63,13 +83,19 @@ function l2normalize(v: Float32Array): Float32Array {
 async function handleImage(data: EmbedRequest) {
   const { id, blob } = data;
   try {
-    const { processor, model } = await getVision();
     const image = await RawImage.fromBlob(blob);
-    const inputs = await processor(image);
-    const { image_embeds } = await model(inputs);
+    const [{ processor, model }, dino] = await Promise.all([getVision(), getDino()]);
+    // CLIP image embedding (semantic).
+    const { image_embeds } = await model(await processor(image));
     const embedding = l2normalize(image_embeds.data as Float32Array);
-    (self as unknown as Worker).postMessage({ type: 'result', id, embedding }, [
+    // DINOv2 CLS token (visual) — first `dim` values of last_hidden_state.
+    const out = await dino.model(await dino.processor(image));
+    const t = out.last_hidden_state;
+    const dim = t.dims[t.dims.length - 1] as number;
+    const dinoEmbedding = l2normalize((t.data as Float32Array).slice(0, dim));
+    (self as unknown as Worker).postMessage({ type: 'result', id, embedding, dino: dinoEmbedding }, [
       embedding.buffer,
+      dinoEmbedding.buffer,
     ]);
   } catch (err) {
     (self as unknown as Worker).postMessage({
@@ -108,4 +134,13 @@ self.onmessage = (e: MessageEvent<Request>) => {
   const data = e.data;
   if (data?.type === 'embed') chain = chain.then(() => handleImage(data));
   else if (data?.type === 'embedText') chain = chain.then(() => handleText(data));
+  // Preload both image models (download + init) ahead of the first real embed, so the
+  // cold start overlaps with the user picking files instead of blocking after they pick.
+  else if (data?.type === 'warm')
+    chain = chain.then(() =>
+      Promise.all([getVision(), getDino()]).then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
 };

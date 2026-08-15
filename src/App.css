@@ -19,8 +19,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 14px;
+  gap: 20px;
+  padding: 14px 18px;
 }
 
 .brand-group {
@@ -89,7 +89,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-right: 14px;
+  padding: 4px 18px 9px 0;
 }
 
 .samplebar {
@@ -100,8 +100,160 @@
   color: #666;
 }
 
+/* On the board, top-right (under the samples row), Clusters view only. */
+.blend {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #111;
+}
+
+.blend-end {
+  user-select: none;
+  line-height: 1;
+  position: relative;
+  cursor: default;
+}
+
+/* Hover explainer, styled like the cluster labels (white, squared black border). */
+.blend-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 172px;
+  white-space: normal;
+  text-align: left;
+  letter-spacing: normal;
+  font-size: 11px;
+  color: #111;
+  background: #fff;
+  border: 1px solid #333;
+  padding: 5px 7px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 8;
+}
+
+.blend-end-right .blend-tip {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.blend-end:hover .blend-tip {
+  opacity: 1;
+}
+
+/* Track holds the range + tick overlay; nudged down ~1px so the slider's midline
+   sits on the labels' x-height optical centre rather than their cap-height centre. */
+.blend-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 12px;
+  transform: translateY(1px);
+}
+
+.blend input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  z-index: 1;
+  width: 101px;
+  height: 2px;
+  margin: 0;
+  background: #ccc;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.blend input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #111;
+  cursor: pointer;
+}
+
+.blend input[type='range']::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: none;
+  border-radius: 50%;
+  background: #111;
+  cursor: pointer;
+}
+
+/* Live alpha readout, following the thumb, just under the track. */
+.blend-value {
+  position: absolute;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  font-size: 10px;
+  color: #999;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .samplebar-label {
   color: #999;
+}
+
+/* ---------- Board switcher ---------- */
+.boardbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+.boardbar-label {
+  color: #999;
+}
+
+.board-link {
+  font: inherit;
+  color: #333;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-link.active {
+  color: #111;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.board-new {
+  font: inherit;
+  color: #999;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.board-new:hover {
+  color: #111;
 }
 
 .sample-link {
@@ -122,7 +274,7 @@
 .tabbar {
   display: flex;
   gap: 12px;
-  padding: 0 14px;
+  padding: 0 18px;
 }
 
 .tab {
