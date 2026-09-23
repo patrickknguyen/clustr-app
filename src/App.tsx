@@ -16,17 +16,10 @@ export default function App() {
 
   useEffect(() => {
     initSamples();
-    // Low-priority prefetch of the embedding models during idle time, so the first
-    // upload is instant. Skip on data-saver / slow connections — a courtesy so we don't
-    // silently pull a model onto a metered device for a visitor who's only browsing.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const conn = (navigator as any).connection;
-    if (conn?.saveData || /(^|-)2g$/.test(conn?.effectiveType ?? '')) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    if (typeof w.requestIdleCallback === 'function') {
-      const id = w.requestIdleCallback(() => embedder.warm(), { timeout: 5000 });
-      return () => w.cancelIdleCallback?.(id);
+    // Load the models during idle time so the first upload doesn't wait on them.
+    if (window.requestIdleCallback) {
+      const id = window.requestIdleCallback(() => embedder.warm(), { timeout: 5000 });
+      return () => window.cancelIdleCallback(id);
     }
     const id = window.setTimeout(() => embedder.warm(), 3000);
     return () => window.clearTimeout(id);
@@ -38,7 +31,6 @@ export default function App() {
       onDragOver={(e) => {
         e.preventDefault();
         setDragging(true);
-        embedder.warm(); // a file is inbound — start loading the model now
       }}
       onDragLeave={(e) => {
         if (e.currentTarget === e.target) setDragging(false);

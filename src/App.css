@@ -40,7 +40,7 @@
   border: none;
   border-bottom: 1px solid #999;
   padding: 3px 2px;
-  min-width: 280px;
+  min-width: 224px;
 }
 
 .board-name::placeholder {
@@ -58,12 +58,6 @@
   gap: 8px;
 }
 
-.counter {
-  font-size: 12px;
-  color: #666;
-  margin-right: 4px;
-}
-
 /* ---------- Buttons ---------- */
 .btn {
   font: inherit;
@@ -78,11 +72,6 @@
   background: #eee;
 }
 
-.btn:disabled {
-  color: #aaa;
-  border-color: #ccc;
-  cursor: not-allowed;
-}
 
 /* ---------- Subbar (tabs + samples) ---------- */
 .subbar {
@@ -151,8 +140,7 @@
   opacity: 1;
 }
 
-/* Track holds the range + tick overlay; nudged down ~1px so the slider's midline
-   sits on the labels' x-height optical centre rather than their cap-height centre. */
+/* Track holds the range; nudged down ~1px to sit on the labels' optical centre. */
 .blend-track {
   position: relative;
   display: flex;
@@ -219,8 +207,29 @@
   color: #666;
 }
 
-.boardbar-label {
-  color: #999;
+.board-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.board-del {
+  font: inherit;
+  color: #bbb;
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.board-item:hover .board-del {
+  opacity: 1;
+}
+
+.board-del:hover {
+  color: #111;
 }
 
 .board-link {
@@ -341,15 +350,6 @@
   display: block;
 }
 
-.thumb-pending {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 8px;
-  height: 8px;
-  background: #fff;
-  border: 1px solid #333;
-}
 
 .thumb-x {
   position: absolute;
@@ -357,6 +357,11 @@
   right: 2px;
   width: 18px;
   height: 18px;
+  box-sizing: border-box;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #333;
   background: #fff;
   font-size: 13px;
@@ -375,10 +380,10 @@
   transform: translate(-50%, -50%);
   z-index: 0;
   white-space: nowrap;
-  font-size: 64px;
-  font-weight: 400;
-  letter-spacing: 0.1em;
-  color: rgba(17, 17, 17, 0.13);
+  font-size: 96px;
+  font-weight: 500;
+  letter-spacing: 0.0em;
+  color: rgba(17, 17, 17, 0.025);
   pointer-events: none;
 }
 

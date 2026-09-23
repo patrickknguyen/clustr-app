@@ -3,16 +3,12 @@ import { embedder } from './lib/embedder';
 import { computeProjection } from './lib/cluster';
 import { alignToReference } from './lib/align';
 import { blendVectors, dinoScale } from './lib/blend';
-import { groupAndLabel } from './lib/labeling';
+import { groupAndLabel, boardIdentity } from './lib/labeling';
 import { VOCABULARY, LABEL_TEMPLATE } from './lib/vocabulary';
 import { STYLE_VOCABULARY } from './lib/style-vocabulary';
 import type { Cluster, ImageItem, Mode, Point } from './types';
 
-/**
- * Load the label vocabulary once. Prefers the shipped `public/vocab.json`
- * (precomputed, so the text model never downloads); falls back to embedding it
- * in the worker if that file isn't present (e.g. before `npm run build:samples`).
- */
+// Load the label vocab once. Prefer the precomputed public/vocab.json, otherwise embed it in the worker.
 let vocabPromise: Promise<{ word: string; vec: Float32Array }[]> | null = null;
 function getVocab() {
   if (!vocabPromise) {
@@ -27,15 +23,14 @@ function getVocab() {
           .then((vecs) => VOCABULARY.map((word, i) => ({ word, vec: vecs[i] }))),
       )
       .catch(() => {
-        vocabPromise = null; // allow retry on next cluster
+        vocabPromise = null;
         return [];
       });
   }
   return vocabPromise;
 }
 
-/** Style/aesthetic vocabulary for the DINO end of the slider. Same load strategy as
- *  getVocab (prefer the precomputed JSON, fall back to embedding in the worker). */
+// Style vocab for the DINO end of the slider. Loads the same way as getVocab.
 let styleVocabPromise: Promise<{ word: string; vec: Float32Array }[]> | null = null;
 function getStyleVocab() {
   if (!styleVocabPromise) {
@@ -63,23 +58,18 @@ interface AppState {
   boardName: string;
   hasClustered: boolean;
   isClustering: boolean;
-  /** Raw UMAP coords, keyed by image id. View layer maps these to pixels. */
+  // Raw UMAP coords by image id. The view converts them to pixels.
   projection: Record<string, Point>;
   clusters: Cluster[];
-  /** Theme shared by the whole board (may be empty). */
   boardTags: string[];
-  /** Ids of the bundled sample boards. */
   samples: string[];
-  /** True when images changed since the last cluster, so Clusters recomputes. */
   dirty: boolean;
-  /** Blend: 0 = pure CLIP (semantic), 1 = pure DINO (visual/by-look). */
+  // 0 is pure CLIP (semantic), 1 is pure DINO (visual).
   alpha: number;
-  /** Stable projection frame (first computed for the current image set); later blends
-   *  are Procrustes-aligned to it so the map doesn't spin/flip as the slider moves. */
+  // Stable frame that later blends align to, so the map doesn't spin as alpha changes.
   projectionRef: Record<string, Point> | null;
 
-  /** In-session boards (not persisted). The fields above are the *active* board's live
-   *  state; other boards are stashed in `saved` and swapped in on switch. */
+  // In-session boards (not persisted). The fields above hold the active board; the rest live in saved.
   boards: { id: string; name: string }[];
   activeBoardId: string;
   saved: Record<string, BoardSnapshot>;
@@ -94,12 +84,11 @@ interface AppState {
   autoCluster: () => void;
   loadSample: (id: string) => Promise<void>;
   initSamples: () => Promise<void>;
-  clearAll: () => void;
   newBoard: () => void;
   switchBoard: (id: string) => void;
+  deleteBoard: (id: string) => void;
 }
 
-// The per-board state we stash when switching away and restore when switching back.
 type BoardSnapshot = {
   images: ImageItem[];
   boardName: string;
@@ -170,7 +159,6 @@ export const useStore = create<AppState>((set, get) => ({
 
     set((s) => ({ images: [...s.images, ...items], dirty: true }));
 
-    // Fire embeddings in the background — don't block the UI.
     for (const item of items) {
       if (!item.file) continue;
       embedder
@@ -183,7 +171,7 @@ export const useStore = create<AppState>((set, get) => ({
                 : i,
             ),
           }));
-          get().autoCluster(); // cluster once this (and any sibling) embeddings settle
+          get().autoCluster();
         })
         .catch(() => {
           set((s) => ({
@@ -205,16 +193,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   setMode: (mode) => set({ mode }),
 
-  // Slider commits on release. Reflow immediately if we're already on the Clusters
-  // map; otherwise just mark dirty so opening Clusters recomputes with the new blend.
+  // If the map is already open, reflow now. Otherwise mark dirty so opening it recomputes.
   setAlpha: (alpha) => {
     set({ alpha });
     if (get().mode === 'cluster' && get().hasClustered) get().runCluster();
     else set({ dirty: true });
   },
 
-  // Opening the Map shows the (usually already-computed) clusters. Recompute only if it
-  // somehow wasn't auto-clustered yet; the grid→map morph plays as mode flips.
   showClusters: async () => {
     const ready = get().images.filter((i) => i.status === 'ready' && i.embedding).length;
     if (ready < 2) return;
@@ -222,15 +207,13 @@ export const useStore = create<AppState>((set, get) => ({
     set({ mode: 'cluster' });
   },
 
-  // Debounced background clustering: fires once embeddings settle, coalescing rapid
-  // one-by-one uploads into a single run and never overlapping an in-flight one. The
-  // Map is kept fresh so opening it is instant.
+  // Debounced background clustering. Coalesces rapid uploads and never overlaps a running pass.
   autoCluster: () => {
     if (autoClusterTimer) clearTimeout(autoClusterTimer);
     autoClusterTimer = setTimeout(() => {
       autoClusterTimer = null;
       const s = get();
-      if (s.isClustering) return void s.autoCluster(); // busy — try again shortly
+      if (s.isClustering) return void s.autoCluster();
       const ready = s.images.filter((i) => i.status === 'ready' && i.embedding).length;
       if (s.dirty && ready >= 2) s.runCluster();
     }, 300);
@@ -243,23 +226,19 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   runCluster: async () => {
-    if (get().isClustering) return; // a run is already in flight; autoCluster will retry
+    if (get().isClustering) return;
     set({ isClustering: true });
-    // Make sure every in-flight embedding has finished so nothing is dropped.
+    // Wait for any in-flight embeddings so none get dropped.
     await embedder.whenIdle();
     const ready = get().images.filter((i) => i.status === 'ready' && i.embedding);
     if (ready.length < 2) {
       set({ isClustering: false });
       return;
     }
-    // Blend CLIP↔DINO for the layout/grouping when we have DINO for every image
-    // (samples always; uploads once the worker fills it in). Labels still use CLIP.
     const alpha = get().alpha;
     const allHaveDino = ready.every((i) => i.dinoEmbedding);
 
-    // Deterministic anchor for this image set = the pure-CLIP (α=0) layout, computed
-    // once and reused for every blend. So a board looks identical no matter which α you
-    // land on or whether you just switched boards — the frame never depends on history.
+    // The reference frame is the pure-CLIP layout, computed once per image set and reused for every blend.
     const ids = ready.map((i) => i.id);
     const existing = get().projectionRef;
     const sameSet =
@@ -271,6 +250,7 @@ export const useStore = create<AppState>((set, get) => ({
       : computeProjection(ready.map((i) => ({ id: i.id, embedding: i.embedding! })));
     if (!sameSet) set({ projectionRef: reference });
 
+    // Blend CLIP and DINO for the layout when every image has a DINO vector. Labels always use CLIP.
     const projInput =
       alpha > 0 && allHaveDino
         ? blendVectors(
@@ -282,13 +262,15 @@ export const useStore = create<AppState>((set, get) => ({
             ),
           )
         : ready.map((i) => ({ id: i.id, embedding: i.embedding! }));
-    // At α=0 this aligns the CLIP layout to itself (identity); at higher α it snaps the
-    // blended layout onto the same CLIP frame.
     const projection = alignToReference(computeProjection(projInput), reference);
-    // Group spatially + tag each group, blending subject↔style vocab by the same alpha
-    // that drives the layout, so labels shift from "what it is" to "how it looks".
+
     const [vocab, styleVocab] = await Promise.all([getVocab(), getStyleVocab()]);
-    const { clusters, boardTags } = groupAndLabel(
+    // Board identity is fixed per image set and independent of alpha, so the board name never drifts.
+    const boardTags =
+      sameSet && get().boardTags.length
+        ? get().boardTags
+        : boardIdentity(ready.map((i) => i.embedding!), vocab, styleVocab);
+    const { clusters } = groupAndLabel(
       ready.map((i) => ({
         id: i.id,
         embedding: i.embedding!,
@@ -297,6 +279,7 @@ export const useStore = create<AppState>((set, get) => ({
       vocab,
       styleVocab,
       alpha,
+      boardTags,
     );
     set({
       projection,
@@ -309,7 +292,7 @@ export const useStore = create<AppState>((set, get) => ({
     // Auto-name the board from its theme, unless the user already named it.
     if (!get().boardName.trim() && boardTags.length) {
       const title = boardTags.map((w) => w.replace(/\b\w/g, (c) => c.toUpperCase())).join(' ');
-      get().setBoardName(`${title} Board`); // syncs the board-switcher name too
+      get().setBoardName(title);
     }
   },
 
@@ -321,7 +304,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       return;
     }
-    // Revoke object URLs from any uploaded images (sample URLs are plain paths).
+    // Free object URLs from any uploaded images (samples use plain paths).
     for (const img of get().images) if (img.file) URL.revokeObjectURL(img.url);
 
     const images: ImageItem[] = board.images.map((im) => ({
@@ -343,7 +326,6 @@ export const useStore = create<AppState>((set, get) => ({
       dirty: true,
       mode: 'grid',
     }));
-    // Land in the library; opening the Map tab triggers the morph.
   },
 
   initSamples: async () => {
@@ -352,16 +334,13 @@ export const useStore = create<AppState>((set, get) => ({
       const list: { id: string; count: number }[] = await (
         await fetch(`${base}samples/index.json`)
       ).json();
-      const ids = list.map((b) => b.id);
-      set({ samples: ids });
-      // Auto-load the first board so the landing isn't a blank canvas.
-      if (ids.length && get().images.length === 0) get().loadSample(ids[0]);
+      set({ samples: list.map((b) => b.id) });
     } catch {
-      // No samples built yet — fine, the app just starts empty.
+      // No samples built yet, so just start empty.
     }
   },
 
-  // Stash the current board and start a fresh empty one (lands in the library).
+  // Save the current board and start a fresh empty one.
   newBoard: () => {
     const id = crypto.randomUUID();
     set((s) => ({
@@ -373,8 +352,7 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
 
-  // Stash the current board, restore the target's state (or empty). Object URLs stay
-  // alive — we're keeping the board in memory, not discarding it.
+  // Save the current board and restore the target. Object URLs stay alive.
   switchBoard: (id) => {
     const s = get();
     if (id === s.activeBoardId) return;
@@ -386,20 +364,26 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  clearAll: () =>
-    set((s) => {
-      for (const img of s.images) if (img.file) URL.revokeObjectURL(img.url);
-      return {
-        images: [],
-        projection: {},
-        projectionRef: null,
-        clusters: [],
-        boardTags: [],
-        boardName: '',
-        boards: s.boards.map((b) => (b.id === s.activeBoardId ? { ...b, name: '' } : b)),
-        hasClustered: false,
-        dirty: false,
-        mode: 'grid',
-      };
-    }),
+  // Remove a board, always keeping at least one. Free its object URLs, and if it was active fall back to a neighbour.
+  deleteBoard: (id) => {
+    const s = get();
+    if (s.boards.length <= 1) return;
+    const snapshot = id === s.activeBoardId ? captureBoard(s) : s.saved[id];
+    if (snapshot) for (const img of snapshot.images) if (img.file) URL.revokeObjectURL(img.url);
+
+    const boards = s.boards.filter((b) => b.id !== id);
+    const { [id]: _dropped, ...saved } = s.saved;
+    if (id !== s.activeBoardId) {
+      set({ boards, saved });
+      return;
+    }
+    const nextId = boards[0].id;
+    set({
+      boards,
+      saved,
+      activeBoardId: nextId,
+      isClustering: false,
+      ...(saved[nextId] ?? EMPTY_BOARD),
+    });
+  },
 }));

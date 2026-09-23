@@ -1,19 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { useStore } from '../store';
 import { useElementSize } from '../hooks/useElementSize';
 import { fitToBox } from '../lib/layout';
 
-const CELL = 150; // base element size (px) — ~8 images per row in the library
+const CELL = 150; // base element size in px, about 8 images per row in the library
 const GAP = 12;
 const PAD = 16;
-const CLUSTER_SCALE = 0.5; // cluster thumbs are smaller (CELL*0.4 ≈ the old 72px)
+const CLUSTER_SCALE = 0.5; // cluster thumbs are half the grid-cell size
 const CHIP_MIN_DIST = 48; // min gap between a cluster's tag chips (px)
 
-/**
- * Push a cluster's tag chips apart so tags that describe the same images (and
- * thus land on the same weighted centroid) don't stack on top of each other.
- */
+// Push a cluster's tag chips apart so ones on the same centroid don't stack.
 function spreadChips(chips: { word: string; x: number; y: number }[]) {
   if (chips.length < 2) return chips;
   // Tiny deterministic jitter gives coincident chips a direction to separate in.
@@ -53,6 +50,25 @@ export function Stage() {
   const [hovered, setHovered] = useState<number | null>(null);
 
   const isCluster = mode === 'cluster';
+
+  // True only on the render where we switch back to the grid, so thumbs slide from
+  // the map into their library slots. This must be set synchronously during render
+  // (not in an effect): Framer Motion picks the transition on the same render the
+  // position targets move, so an effect fires one render too late and the move snaps.
+  // A plain resize (no mode change) leaves this false, so the grid repositions
+  // instantly instead of sliding.
+  const [prevMode, setPrevMode] = useState(mode);
+  const [animateGrid, setAnimateGrid] = useState(false);
+  if (prevMode !== mode) {
+    setPrevMode(mode);
+    setAnimateGrid(mode === 'grid');
+  }
+  // Clear the flag after the move has started, so a later resize snaps again. Motion
+  // won't restart the in-flight animation since the targets don't change.
+  useEffect(() => {
+    if (animateGrid) setAnimateGrid(false);
+  }, [animateGrid]);
+
   const cols = Math.max(1, Math.floor((size.width - PAD * 2 + GAP) / (CELL + GAP)));
 
   // Grid slot (top-left) per image, plus total scroll height.
@@ -67,7 +83,7 @@ export function Stage() {
     return { pos, height: PAD * 2 + rows * (CELL + GAP) - GAP };
   }, [images, cols]);
 
-  // Cluster centers via UMAP -> viewport mapping.
+  // Cluster centers, mapped from the UMAP projection into the viewport.
   const clusterPos = useMemo(
     () =>
       fitToBox(
@@ -115,16 +131,11 @@ export function Stage() {
       ? new Set(clusters[hovered].memberIds)
       : null;
 
-  // Board-level theme: a faint word at the map's center of mass (only when there
-  // are multiple clusters — with one cluster its own label already says it).
+  // Board theme: a faint word pinned to the viewport center (only with 2+ clusters).
   const boardTheme = useMemo(() => {
     if (!isCluster || boardTags.length === 0 || clusters.length < 2) return null;
-    const pts = Object.values(clusterPos);
-    if (pts.length === 0) return null;
-    const x = pts.reduce((a, p) => a + p.x, 0) / pts.length;
-    const y = pts.reduce((a, p) => a + p.y, 0) / pts.length;
-    return { text: boardTags.join(' · '), x, y };
-  }, [isCluster, boardTags, clusters.length, clusterPos]);
+    return { text: boardTags.join(' | '), x: size.width / 2, y: size.height / 2 };
+  }, [isCluster, boardTags, clusters.length, size.width, size.height]);
 
   if (images.length === 0) {
     return (
@@ -172,9 +183,10 @@ export function Stage() {
               initial={false}
               animate={{ x, y, scale, opacity }}
               transition={
-                // Animate the grid↔map morph and the in-map reflow; but in the grid,
-                // reposition instantly so resizing the window doesn't slide the images.
-                isCluster
+                // Animate the grid-to-map morph, and the map-back-to-grid morph right
+                // after a mode switch. Otherwise (a resize in the grid) reposition
+                // instantly so the images don't slide.
+                isCluster || animateGrid
                   ? { duration: 0.9, ease: [0.16, 1, 0.3, 1], opacity: { duration: 0.2 } }
                   : { duration: 0, opacity: { duration: 0.2 } }
               }

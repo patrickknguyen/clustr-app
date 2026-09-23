@@ -1,6 +1,5 @@
 import { useRef } from 'react';
 import { useStore } from '../store';
-import { embedder } from '../lib/embedder';
 
 export function Toolbar() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -26,7 +25,7 @@ export function Toolbar() {
           className="board-name"
           type="text"
           value={boardName}
-          placeholder="Untitled board"
+          placeholder="Untitled"
           aria-label="Board name"
           onChange={(e) => setBoardName(e.target.value)}
         />
@@ -41,11 +40,7 @@ export function Toolbar() {
           hidden
           onChange={onPick}
         />
-        <button
-          className="btn"
-          onMouseEnter={() => embedder.warm()} // likely about to upload — preload the model
-          onClick={() => inputRef.current?.click()}
-        >
+        <button className="btn" onClick={() => inputRef.current?.click()}>
           Add images
         </button>
       </div>

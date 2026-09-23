@@ -3,14 +3,12 @@ import type { Cluster, ClusterTag, Point } from '../types';
 
 const MAX_K = 7;
 const QUALITY_THRESHOLD = 0.12; // min mean silhouette to accept discrete clusters
-const TAG_MARGIN = 0.5; // cluster tags: keep a 2nd/3rd tag if >= this fraction of the top score
-const BOARD_MARGIN = 0.97; // board theme: tighter — a 2nd word must be nearly as universal as #1
-// (raised from 0.95: robust centroids compress the min-cosine ratios, so the old
-// margin let noise words through; 0.97 keeps summer=1 word, design=3, per sweep)
-const TAG_TEMP = 1.0; // chip placement sharpness: lower snaps to top image, higher floats among matches
+const TAG_MARGIN = 0.5; // keep a 2nd/3rd cluster tag if it scores at least this fraction of the top
+const BOARD_MARGIN = 0.97; // tighter margin for board-theme words
+const TAG_TEMP = 1.0; // chip placement sharpness
 const SYNONYM_MAX_SIM = 0.9; // drop a tag whose text vector is this close to one already chosen
-const BOARD_THRESHOLD = 0.15; // min "applies to every cluster" score for a board-level theme to exist
-const MATCH_FLOOR = 0.90; // a tag must match the cluster at >= this fraction of its best match
+const BOARD_THRESHOLD = 0.15; // min whole-board centroid cosine for a board-level theme to exist
+const MATCH_FLOOR = 0.90; // a tag must match the cluster at least this fraction of its best match
 const TRIM_FRACTION = 0.25; // robust centroid: share of farthest members dropped before re-averaging
 
 interface Item {
@@ -21,8 +19,7 @@ interface Item {
 
 type Vocab = { word: string; vec: Float32Array }[];
 
-/** Words that pass a cluster's match floor, scored by distinctiveness (sim − the word's
- *  cross-cluster mean), keeping the raw sim for the floor test. */
+// Words above the cluster's match floor, scored by distinctiveness: sim minus the word's cross-cluster mean.
 function scoreVocab(
   sims: number[],
   wordMean: number[],
@@ -36,27 +33,23 @@ function scoreVocab(
 }
 
 /**
- * Group images and tag each group. `k` is chosen by silhouette score, not a fixed
- * formula; if no split is well-separated enough, the whole board collapses to a single
- * descriptor. Tags come from the CLIP centroid of each group ranked by distinctiveness,
- * count is variable (1–3), and — driven by `alpha` — the candidate words blend from the
- * subject `vocab` (α=0, "what it is") toward the `style` vocab (α=1, "how it looks"):
- * each side's scores are weighted by (1−α) and α, so mid-slider labels mix. Labels
- * always read the CLIP embedding even when clustering is on the DINO-blended layout.
- *
- * Also returns `boardTags`: the theme shared by the *whole* board (subject vocab only,
- * α-independent — a board's identity shouldn't wobble as you explore groupings).
+ * Group the images and tag each group. k is picked by silhouette score. If no split is
+ * clean enough, the whole board collapses to a single descriptor. Tags come from each
+ * group's CLIP centroid, ranked by distinctiveness. As alpha rises the candidate words
+ * shift from the subject vocab (alpha 0) toward the style vocab (alpha 1). Labels always
+ * read CLIP, even when the layout was clustered on the DINO blend. boardTags are kept off
+ * the cluster tags and returned unchanged.
  */
 export function groupAndLabel(
   items: Item[],
   vocab: Vocab,
   style: Vocab = [],
   alpha = 0,
+  boardTags: string[] = [],
   maxTags = 3,
 ): { clusters: Cluster[]; boardTags: string[] } {
   const n = items.length;
   if (n === 0) return { clusters: [], boardTags: [] };
-  // Combined map covers both vocabularies for chip placement + synonym dedup.
   const vocabMap = new Map([...vocab, ...style].map((v) => [v.word, v.vec]));
   const blend = (
     nouns: { word: string; score: number }[],
@@ -77,14 +70,16 @@ export function groupAndLabel(
     if (score > best.score) best = { k, score, assign };
   }
 
-  // No well-separated structure: one board-level descriptor.
+  // No clean split, so describe the whole board with one set of tags.
   if (best.k < 2 || best.score < QUALITY_THRESHOLD) {
     const centroid = robustCentroid(items.map((i) => i.embedding));
-    const boardTags = boardTheme([centroid], vocab, vocabMap, maxTags);
     const isBoardWord = boardExcluder(boardTags, vocabMap);
     const nouns = vocab.map((v) => ({ word: v.word, score: dot(centroid, v.vec) }));
     const styles = style.map((v) => ({ word: v.word, score: dot(centroid, v.vec) }));
-    const cands = blend(nouns.filter((x) => !isBoardWord(x.word)), styles);
+    const cands = blend(
+      nouns.filter((x) => !isBoardWord(x.word)),
+      styles.filter((x) => !isBoardWord(x.word)),
+    );
     const words = pickTags(cands.length ? cands : blend(nouns, styles), vocabMap, maxTags, TAG_MARGIN);
     const clusters = [{ memberIds: items.map((i) => i.id), tags: placeTags(words, items, vocabMap) }];
     return { clusters, boardTags };
@@ -100,18 +95,17 @@ export function groupAndLabel(
   const styleSims = centroids.map((c) => style.map((v) => dot(c, v.vec)));
   const styleMean = style.map((_, j) => styleSims.reduce((a, row) => a + row[j], 0) / (styleSims.length || 1));
 
-  // Board theme first, so cluster tags can exclude it: a word that describes the
-  // whole board (e.g. "summer") belongs on the board, not repeated on a cluster.
-  const boardTags = boardTheme(centroids, vocab, vocabMap, maxTags);
+  // A word that describes the whole board belongs on the board, not on any one cluster.
   const isBoardWord = boardExcluder(boardTags, vocabMap);
 
   const clusters = grouped.map((members, ci) => {
-    // Each vocabulary is match-floored + distinctiveness-scored on its own, then the
-    // two are blended by alpha. Board-level subject words are dropped (they belong on
-    // the board); fall back to the unfiltered set so a cluster never ends up tagless.
+    // Score each vocab on its own, blend by alpha, drop board words. Fall back so a cluster is never tagless.
     const nounEligible = scoreVocab(sims[ci], wordMean, vocab);
     const styleEligible = scoreVocab(styleSims[ci], styleMean, style);
-    const cands = blend(nounEligible.filter((x) => !isBoardWord(x.word)), styleEligible);
+    const cands = blend(
+      nounEligible.filter((x) => !isBoardWord(x.word)),
+      styleEligible.filter((x) => !isBoardWord(x.word)),
+    );
     const words = pickTags(
       cands.length ? cands : blend(nounEligible, styleEligible),
       vocabMap,
@@ -125,35 +119,40 @@ export function groupAndLabel(
 }
 
 /**
- * The theme shared by the whole board: words scored by their *minimum* similarity
- * across cluster centroids — i.e. how well a word applies to EVERY cluster. This
- * promotes a truly universal word ("summer") and demotes sub-theme words
- * ("beach", "sand") that only fit one cluster, so the theme never becomes a
- * redundant pile. If nothing clears BOARD_THRESHOLD, the board has no shared
- * theme and we return nothing (rather than a meaningless word).
+ * The board's fixed identity: one label picked once per image set, independent of alpha.
+ * Both vocabs are scored against the whole-board robust centroid (CLIP). The winning side is
+ * whichever has the more distinctive top word (furthest above its own vocab's average) rather
+ * than the higher raw cosine, so the large subject list can't beat the small curated style
+ * list on size alone. Returns nothing if even the best word barely matches, meaning its raw
+ * cosine is below BOARD_THRESHOLD.
  */
-function boardTheme(
-  centroids: Float32Array[],
+export function boardIdentity(
+  embeddings: Float32Array[],
   vocab: Vocab,
-  vocabMap: Map<string, Float32Array>,
-  maxTags: number,
+  style: Vocab = [],
+  maxTags = 3,
 ): string[] {
-  if (centroids.length === 0) return [];
-  const scored = vocab.map((v) => {
-    let min = Infinity;
-    for (const c of centroids) min = Math.min(min, dot(c, v.vec));
-    return { word: v.word, score: min };
-  });
-  const topScore = Math.max(...scored.map((s) => s.score));
-  if (!Number.isFinite(topScore) || topScore < BOARD_THRESHOLD) return [];
-  return pickTags(scored, vocabMap, maxTags, BOARD_MARGIN);
+  if (embeddings.length === 0) return [];
+  const centroid = robustCentroid(embeddings);
+  const vocabMap = new Map([...vocab, ...style].map((v) => [v.word, v.vec]));
+
+  const distinct = (v: Vocab) => {
+    const raw = v.map((w) => ({ word: w.word, raw: dot(centroid, w.vec) }));
+    const mean = raw.reduce((a, s) => a + s.raw, 0) / (raw.length || 1);
+    return raw.map((s) => ({ word: s.word, score: s.raw - mean, raw: s.raw }));
+  };
+  const nouns = distinct(vocab);
+  const styles = distinct(style);
+  const top = (arr: { score: number }[]) => arr.reduce((m, x) => Math.max(m, x.score), -Infinity);
+
+  const winner = top(styles) > top(nouns) ? styles : nouns;
+  if (winner.length === 0) return [];
+  const winnerTop = winner.reduce((m, x) => (x.score > m.score ? x : m), winner[0]);
+  if (winnerTop.raw < BOARD_THRESHOLD) return [];
+  return pickTags(winner, vocabMap, maxTags, BOARD_MARGIN);
 }
 
-/**
- * Predicate for words to keep off cluster tags: the board-theme words themselves
- * plus any near-synonym of one (so "summer" excludes "summertime" too), reusing
- * the same similarity cutoff pickTags uses to dedupe synonyms.
- */
+// Words to keep off the cluster tags: the board-theme words themselves plus their near-synonyms.
 function boardExcluder(
   boardTags: string[],
   vocabMap: Map<string, Float32Array>,
@@ -170,11 +169,7 @@ function boardExcluder(
   };
 }
 
-/**
- * Top-1 always, then further tags while they stay near the top score — skipping
- * any candidate whose text vector is a near-synonym of one already chosen, so
- * labels read "ocean · beach · swimming" rather than the redundant "ocean · sea".
- */
+// Always take the top word, then more while they stay near the top score, skipping near-synonyms already chosen.
 function pickTags(
   scored: { word: string; score: number }[],
   vocabMap: Map<string, Float32Array>,
@@ -199,10 +194,10 @@ function pickTags(
 }
 
 /**
- * Weight each cluster member by how well it matches the tag, so the chip can sit
- * at the weighted centroid of the images it describes. Similarities are z-scored
- * before softmax because CLIP's cross-modal cosines sit in a narrow band —
- * without that, weights are near-uniform and every chip collapses to the center.
+ * Weight each member by how well it matches the tag, so the chip can sit at the weighted
+ * centroid of the images it describes. Similarities are z-scored before the softmax because
+ * CLIP's cross-modal cosines sit in a narrow band; without that the weights are nearly
+ * uniform and every chip stacks at the center.
  */
 function placeTags(words: string[], members: Item[], vocabMap: Map<string, Float32Array>): ClusterTag[] {
   return words.map((word) => {
@@ -220,7 +215,7 @@ function placeTags(words: string[], members: Item[], vocabMap: Map<string, Float
   });
 }
 
-/** Seeded k-means (k-means++ init) over 2D points; returns a cluster index each. */
+// Seeded k-means with k-means++ init over 2D points. Returns a cluster index per point.
 function kmeans(points: Point[], k: number): number[] {
   const n = points.length;
   if (n <= k) return points.map((_, i) => i);
@@ -280,7 +275,7 @@ function kmeans(points: Point[], k: number): number[] {
   return assign;
 }
 
-/** Mean silhouette score of an assignment; measures how well-separated clusters are. */
+// Mean silhouette score of an assignment. Higher means better-separated clusters.
 function silhouette(assign: number[], dist: Float64Array, k: number): number {
   const n = assign.length;
   const members: number[][] = Array.from({ length: k }, () => []);
@@ -320,11 +315,9 @@ function pairwise(pts: Point[]): Float64Array {
 }
 
 /**
- * Centroid that ignores a cluster's outliers: take the mean, drop the farthest
- * TRIM_FRACTION of members (by cosine to that mean), then re-average the rest. This
- * keeps a label describing the cluster's coherent core instead of being dragged by a
- * stray member — e.g. one vivid image pulling "color" onto a swim cluster. Embeddings
- * are unit-normalized (see embed.worker l2normalize), so dot() is cosine.
+ * Centroid that ignores outliers. Take the mean, drop the farthest TRIM_FRACTION of members
+ * by cosine to that mean, then re-average the rest. This keeps a label on the cluster's core
+ * instead of letting one stray image pull it off. Embeddings are unit-normalized, so dot is cosine.
  */
 function robustCentroid(vecs: Float32Array[]): Float32Array {
   const c0 = meanVector(vecs);
