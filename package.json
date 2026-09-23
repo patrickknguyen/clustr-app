@@ -8,7 +8,6 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "scrape": "scripts/.venv/bin/python scripts/scrape_pinterest.py",
     "build:samples": "tsx scripts/build-samples.ts",
     "build:vocab": "tsx scripts/build-vocab.ts"
   },
