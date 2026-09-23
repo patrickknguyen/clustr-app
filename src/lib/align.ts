@@ -1,21 +1,13 @@
 import type { Point } from '../types';
 
-/**
- * How firmly to snap each blend back onto the reference frame. 1 = fully pinned (only
- * genuine reshuffling moves, can feel static); 0 = mirror-flips removed but all of
- * UMAP's rotation kept (most motion). Mirror-flips (the jarring "pole inversion") are
- * ALWAYS removed regardless — only the rotation component is damped by this factor.
- */
+// How firmly to snap each blend back onto the reference: 1 = fully pinned, 0 = only flips removed.
 const ALIGN_STRENGTH = 0.9;
 
 /**
- * Rotate/reflect `coords` to (partly) match `reference` over their shared ids (2-D
- * orthogonal Procrustes). UMAP fixes local neighbourhoods but leaves the map's global
- * orientation and handedness free, so consecutive blends can come out spun or
- * mirror-flipped even when the structure barely changed — the poles "invert", the map
- * re-centres. We always cancel the handedness flip, and cancel ALIGN_STRENGTH of the
- * rotation, leaving the rest as gentle drift. Translation and scale are ignored on
- * purpose — fitToBox re-centres and re-scales downstream.
+ * Rotate/reflect `coords` to (partly) match `reference` over shared ids (2-D orthogonal
+ * Procrustes). UMAP leaves the map's orientation and handedness free, so consecutive blends
+ * can come out spun or mirror-flipped. Flips are always cancelled; rotation is damped by
+ * `strength`, leaving the rest as gentle drift. Translation/scale are left to fitToBox.
  */
 export function alignToReference(
   coords: Record<string, Point>,
@@ -41,7 +33,7 @@ export function alignToReference(
   rx /= n;
   ry /= n;
 
-  // Cross-covariance A = Xcentred^T · Rcentred, as scalars [a b; c d].
+  // Cross-covariance A = Xcentered^T times Rcentered, stored as the scalars [a b; c d].
   let a = 0;
   let b = 0;
   let c = 0;
@@ -57,11 +49,8 @@ export function alignToReference(
     d += uy * vy;
   }
 
-  // Best pure rotation vs best reflection (closed form in 2-D); take whichever aligns
-  // more. A rotation we only PARTLY undo (scale the angle by `strength`) so a gentle
-  // spin survives. A reflection we undo FULLY — a half-applied flip just turns into a
-  // rotation that looks equally inverted, so partial reflection is meaningless; the
-  // jarring pole-inversion is always cancelled outright.
+  // Best rotation vs best reflection (closed form in 2-D). Take whichever aligns more.
+  // Rotation is undone partly (angle scaled by strength); reflection is undone fully.
   let m00: number;
   let m01: number;
   let m10: number;

@@ -1,11 +1,9 @@
 import type { Point } from '../types';
 
 /**
- * Pure mapping of raw projection coordinates into a pixel box, preserving
- * aspect ratio and centering, then a light collision-relaxation pass so
- * near-identical images fan out instead of stacking. Deterministic given the
- * same inputs, so resizing just rescales.
- * Returned points are thumbnail *centers*.
+ * Map raw projection coords into a pixel box (aspect-preserving, centered), then a light
+ * collision-relaxation pass so near-identical images fan out instead of stacking.
+ * Deterministic, so resizing just rescales. Returned points are thumbnail centers.
  */
 export function fitToBox(
   projection: Record<string, Point>,
@@ -41,7 +39,6 @@ export function fitToBox(
   const offX = padding + (availW - usedW) / 2;
   const offY = padding + (availH - usedH) / 2;
 
-  // Mutable working set for relaxation.
   const nodes = present.map((id) => ({
     id,
     x: offX + (projection[id].x - minX) * scale,
@@ -55,11 +52,7 @@ export function fitToBox(
   return out;
 }
 
-/**
- * Simple O(n²) repulsion: pairs closer than minDist are pushed apart. Keeps the
- * cluster shape but stops thumbnails from perfectly overlapping. Cheap at the
- * scale we target (<= a few hundred nodes).
- */
+// Quadratic repulsion: pairs closer than minDist are pushed apart, keeping cluster shape.
 function relax(
   nodes: { id: string; x: number; y: number }[],
   minDist: number,
@@ -78,7 +71,7 @@ function relax(
         let dy = b.y - a.y;
         let d = Math.hypot(dx, dy);
         if (d === 0) {
-          // Perfectly coincident: nudge apart deterministically.
+          // Coincident: nudge apart deterministically.
           dx = Math.cos(i * 2.4);
           dy = Math.sin(i * 2.4);
           d = 1;
@@ -94,7 +87,7 @@ function relax(
         }
       }
     }
-    // Keep everything inside the padded viewport.
+    // Clamp inside the padded viewport.
     for (const n of nodes) {
       n.x = Math.max(padding + half / 2, Math.min(width - padding - half / 2, n.x));
       n.y = Math.max(padding + half / 2, Math.min(height - padding - half / 2, n.y));

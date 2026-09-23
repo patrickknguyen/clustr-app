@@ -1,12 +1,8 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 
-/**
- * Lo-fi semantic↔aesthetic blend slider, shown on the board (Clusters view only).
- * Continuous; moves freely while dragging (local state) with a live α readout under
- * the thumb, and commits — reflowing the map — on release. Hidden until every ready
- * image has a DINO vector.
- */
+// Semantic to aesthetic blend slider, shown on the Map view only. It moves freely while
+// dragging and commits on release. Hidden until every ready image has a DINO vector.
 export function BlendSlider() {
   const alpha = useStore((s) => s.alpha);
   const setAlpha = useStore((s) => s.setAlpha);

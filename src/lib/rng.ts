@@ -1,4 +1,4 @@
-/** Seeded PRNG (mulberry32) — deterministic layouts and clustering across runs. */
+// Seeded PRNG (mulberry32) for deterministic layouts and clustering across runs.
 export function mulberry32(seed: number): () => number {
   return function () {
     seed |= 0;

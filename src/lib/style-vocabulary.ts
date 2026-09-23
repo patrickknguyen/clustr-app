@@ -1,7 +1,5 @@
-// Curated visual-character vocabulary for the "aesthetic" (DINO) end of the slider —
-// tone, light, texture, composition, era, colour-mood. These describe how a cluster
-// *looks* rather than what it *is*, so by-look groups get by-look labels. Embedded with
-// the same CLIP text tower + template as the subject vocabulary (see build-samples).
+// Curated visual-character vocabulary for the aesthetic (DINO) end of the slider: tone,
+// light, texture, composition, mood. Describes how a cluster looks rather than what it is.
 export const STYLE_VOCABULARY: string[] = [
   'minimal', 'warm', 'cool', 'muted', 'saturated', 'vibrant', 'monochrome', 'pastel', 'moody',
   'bright', 'airy', 'dark', 'high contrast', 'low contrast', 'soft light', 'harsh light', 'grainy',

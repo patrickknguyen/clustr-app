@@ -1,5 +1,4 @@
-// Main-thread manager around a single embedding worker.
-// One worker keeps memory sane (one model copy) and processes a FIFO queue,
+// Main-thread manager around a single embedding worker (one model copy, FIFO queue),
 // so images embed in the background while the user keeps arranging.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -35,8 +34,8 @@ class Embedder {
 
   private warmed = false;
 
-  /** Kick off the model download + init ahead of the first upload (idempotent), so the
-   *  cold start overlaps with the user choosing files rather than blocking afterward. */
+  // Preload the model ahead of the first upload (idempotent), so the cold start overlaps
+  // with the user choosing files.
   warm(): void {
     if (this.warmed) return;
     this.warmed = true;
@@ -50,7 +49,7 @@ class Embedder {
     });
   }
 
-  /** Embed a batch of text strings; resolves to one normalized vector each. */
+  // Embed a batch of text strings into one normalized vector each.
   embedText(texts: string[]): Promise<Float32Array[]> {
     const id = `text-${this.seq++}`;
     return new Promise((resolve, reject) => {
@@ -59,7 +58,7 @@ class Embedder {
     });
   }
 
-  /** Resolves once every queued embedding has settled. */
+  // Resolves once every queued embedding has settled.
   whenIdle(): Promise<void> {
     return new Promise((resolve) => {
       const check = () => {

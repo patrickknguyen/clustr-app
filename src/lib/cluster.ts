@@ -2,11 +2,8 @@ import { UMAP } from 'umap-js';
 import { mulberry32 } from './rng';
 import type { Point } from '../types';
 
-/**
- * Project high-dimensional CLIP embeddings to a 2D map with UMAP. Returns raw
- * (unnormalized) coordinates so the view can map them to any viewport size
- * without re-running the projection — keeping positions stable on resize.
- */
+// Project embeddings to a 2D map with UMAP. Returns raw coords so the view can rescale
+// to any viewport without re-projecting, keeping positions stable on resize.
 export function computeProjection(
   items: { id: string; embedding: Float32Array }[],
 ): Record<string, Point> {

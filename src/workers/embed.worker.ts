@@ -8,8 +8,7 @@ import {
   RawImage,
 } from '@huggingface/transformers';
 
-// Small, fast CLIP (semantic) + DINOv2-small (visual). CLIP vision + text towers for
-// image embeddings and zero-shot labels; DINO CLS token for the "by look" axis.
+// CLIP vision + text towers (image embeddings + zero-shot labels); DINOv2 CLS token (by-look axis).
 const MODEL_ID = 'Xenova/clip-vit-base-patch32';
 const DINO_ID = 'Xenova/dinov2-small';
 
@@ -25,10 +24,7 @@ let textPromise: Promise<unknown> | null = null;
 let dinoProcessorPromise: Promise<unknown> | null = null;
 let dinoPromise: Promise<unknown> | null = null;
 
-// fp32 (lossless). We measured q8 at ~0.89–0.93 cosine vs fp32 on the same image — a real
-// shift, not negligible — and it would mismatch the fp32 sample embeddings; the idle-warm
-// prefetch already hides the download, so there's nothing to buy by quantizing. Prefer
-// WebGPU, fall back to wasm if it's unavailable.
+// fp32 to match the fp32 sample embeddings (q8 drifts to about 0.89-0.93 cosine). Prefer WebGPU, else wasm.
 async function withFallback<T>(load: (device: 'webgpu' | 'wasm', dtype: 'fp32') => Promise<T>) {
   try {
     return await load('webgpu', 'fp32');
@@ -85,10 +81,9 @@ async function handleImage(data: EmbedRequest) {
   try {
     const image = await RawImage.fromBlob(blob);
     const [{ processor, model }, dino] = await Promise.all([getVision(), getDino()]);
-    // CLIP image embedding (semantic).
     const { image_embeds } = await model(await processor(image));
     const embedding = l2normalize(image_embeds.data as Float32Array);
-    // DINOv2 CLS token (visual) — first `dim` values of last_hidden_state.
+    // DINOv2 CLS token: the first dim values of last_hidden_state.
     const out = await dino.model(await dino.processor(image));
     const t = out.last_hidden_state;
     const dim = t.dims[t.dims.length - 1] as number;
@@ -128,14 +123,13 @@ async function handleText(data: EmbedTextRequest) {
   }
 }
 
-// Serialize requests so we never run two model passes at once in this worker.
+// Serialize requests so we never run two model passes at once.
 let chain: Promise<void> = Promise.resolve();
 self.onmessage = (e: MessageEvent<Request>) => {
   const data = e.data;
   if (data?.type === 'embed') chain = chain.then(() => handleImage(data));
   else if (data?.type === 'embedText') chain = chain.then(() => handleText(data));
-  // Preload both image models (download + init) ahead of the first real embed, so the
-  // cold start overlaps with the user picking files instead of blocking after they pick.
+  // Preload both image models ahead of the first embed.
   else if (data?.type === 'warm')
     chain = chain.then(() =>
       Promise.all([getVision(), getDino()]).then(

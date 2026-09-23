@@ -1,6 +1,5 @@
-// Blend the two image spaces — CLIP (semantic) and DINOv2 (visual) — into one
-// vector per image, controlled by alpha. alpha=0 → pure CLIP (semantic grouping,
-// the original behaviour); alpha=1 → pure DINO (grouping by look).
+// Blend CLIP (semantic) and DINOv2 (visual) into one vector per image, controlled by alpha.
+// alpha 0 is pure CLIP, alpha 1 is pure DINO (grouping by look).
 
 function eucd(a: Float32Array, b: Float32Array): number {
   let s = 0;
@@ -20,21 +19,16 @@ function distSpread(vecs: Float32Array[]): number {
   return Math.sqrt(ds.reduce((a, b) => a + (b - mean) ** 2, 0) / ds.length) || 1;
 }
 
-/**
- * Per-board scale that makes DINO's pairwise-distance spread match CLIP's. Without
- * it the two spaces are on different rulers and the slider feels non-linear (one
- * space dominates well before the midpoint). Computed from the board's own vectors,
- * so every board stays balanced regardless of how its two spaces happen to spread.
- */
+// Per-board scale that makes DINO's distance spread match CLIP's, so the slider feels even.
 export function dinoScale(clip: Float32Array[], dino: Float32Array[]): number {
   return distSpread(clip) / distSpread(dino);
 }
 
 /**
- * One blended vector per image: `[ √(1−α)·clip , √α·scale·dino ]`. Euclidean distance
- * on the concatenation equals `(1−α)·clipDist² + α·(scale·dinoDist)²`, so α linearly
- * interpolates the grouping between the two spaces. Feeds UMAP + clustering; labels
- * still read the raw CLIP vector (DINO has no text tower).
+ * One blended vector per image: [ sqrt(1-a)*clip , sqrt(a)*scale*dino ], where a is alpha.
+ * The squared distance between two of these works out to (1-a)*clipDist^2 + a*(scale*dinoDist)^2,
+ * so alpha interpolates linearly between the two spaces. This feeds UMAP and clustering; the
+ * labels still read the raw CLIP vector.
  */
 export function blendVectors(
   items: { id: string; clip: Float32Array; dino: Float32Array }[],

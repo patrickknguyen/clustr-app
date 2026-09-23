@@ -4,7 +4,7 @@ export function TabBar() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const showClusters = useStore((s) => s.showClusters);
-  // "Mapping…" spans the whole upload → embed → cluster process.
+  // "Mapping..." covers the whole upload, embed, and cluster process.
   const isBusy = useStore(
     (s) => s.isClustering || s.images.some((i) => i.status === 'pending'),
   );
