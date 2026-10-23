@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { embedder } from './lib/embedder';
 import { computeProjection } from './lib/cluster';
 import { alignToReference } from './lib/align';
+import { RAW } from './lib/raw';
 import { blendVectors, dinoScale } from './lib/blend';
 import { groupAndLabel, boardIdentity } from './lib/labeling';
 import { VOCABULARY, LABEL_TEMPLATE } from './lib/vocabulary';
@@ -262,7 +263,8 @@ export const useStore = create<AppState>((set, get) => ({
             ),
           )
         : ready.map((i) => ({ id: i.id, embedding: i.embedding! }));
-    const projection = alignToReference(computeProjection(projInput), reference);
+    const raw = computeProjection(projInput);
+    const projection = RAW ? raw : alignToReference(raw, reference);
 
     const [vocab, styleVocab] = await Promise.all([getVocab(), getStyleVocab()]);
     // Board identity is fixed per image set and independent of alpha, so the board name never drifts.

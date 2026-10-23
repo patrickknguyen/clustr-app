@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
+import { RAW } from '../lib/raw';
 
 // Semantic to aesthetic blend slider, shown on the Map view only. It moves freely while
 // dragging and commits on release. Hidden until every ready image has a DINO vector.
@@ -28,7 +29,11 @@ export function BlendSlider() {
           max={1}
           step={0.01}
           value={local}
-          onChange={(e) => setLocal(Number(e.target.value))}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setLocal(v);
+            if (RAW) setAlpha(v);
+          }}
           onPointerUp={(e) => setAlpha(Number(e.currentTarget.value))}
           onKeyUp={(e) => setAlpha(Number(e.currentTarget.value))}
           aria-label="Blend semantic to aesthetic grouping"
