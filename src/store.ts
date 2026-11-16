@@ -7,6 +7,7 @@ import { blendVectors, dinoScale } from './lib/blend';
 import { groupAndLabel, boardIdentity } from './lib/labeling';
 import { VOCABULARY, LABEL_TEMPLATE } from './lib/vocabulary';
 import { STYLE_VOCABULARY } from './lib/style-vocabulary';
+import { selectImages, toDisplayableImage } from './lib/images';
 import type { Cluster, ImageItem, Mode, Point } from './types';
 
 // Load the label vocab once. Prefer the precomputed public/vocab.json, otherwise embed it in the worker.
@@ -130,6 +131,30 @@ const INITIAL_BOARD_ID = 'board-1';
 
 let autoClusterTimer: ReturnType<typeof setTimeout> | null = null;
 
+// HEIC transcoding is async, and the user may switch boards before it finishes.
+// Writes go to the board the files were dropped on, not whichever is active now.
+function patchBoardImage(
+  s: AppState,
+  boardId: string,
+  id: string,
+  patch: Partial<ImageItem>,
+): Partial<AppState> {
+  const apply = (images: ImageItem[]) =>
+    images.map((i) => (i.id === id ? { ...i, ...patch } : i));
+  if (s.activeBoardId === boardId) {
+    if (!s.images.some((i) => i.id === id)) return {};
+    return { images: apply(s.images) };
+  }
+  const snap = s.saved[boardId];
+  if (!snap || !snap.images.some((i) => i.id === id)) return {};
+  return {
+    saved: {
+      ...s.saved,
+      [boardId]: { ...snap, images: apply(snap.images) },
+    },
+  };
+}
+
 export const useStore = create<AppState>((set, get) => ({
   images: [],
   mode: 'grid',
@@ -148,41 +173,69 @@ export const useStore = create<AppState>((set, get) => ({
   saved: {},
 
   addFiles: (files) => {
-    const items: ImageItem[] = files
-      .filter((f) => f.type.startsWith('image/'))
-      .map((f) => ({
-        id: crypto.randomUUID(),
-        url: URL.createObjectURL(f),
-        file: f,
-        status: 'pending' as const,
-      }));
-    if (items.length === 0) return;
+    const boardId = get().activeBoardId;
+    void (async () => {
+      const accepted = await selectImages(files);
+      if (accepted.length === 0) return;
 
-    set((s) => ({ images: [...s.images, ...items], dirty: true }));
+      const items: ImageItem[] = await Promise.all(
+        accepted.map(async (file) => {
+          try {
+            const display = await toDisplayableImage(file);
+            return {
+              id: crypto.randomUUID(),
+              url: URL.createObjectURL(display),
+              file: display,
+              status: 'pending' as const,
+            };
+          } catch {
+            return {
+              id: crypto.randomUUID(),
+              url: '',
+              file,
+              status: 'error' as const,
+            };
+          }
+        }),
+      );
 
-    for (const item of items) {
-      if (!item.file) continue;
-      embedder
-        .embed(item.id, item.file)
-        .then(({ clip, dino }) => {
-          set((s) => ({
-            images: s.images.map((i) =>
-              i.id === item.id
-                ? { ...i, embedding: clip, dinoEmbedding: dino, status: 'ready' }
-                : i,
-            ),
-          }));
-          get().autoCluster();
-        })
-        .catch(() => {
-          set((s) => ({
-            images: s.images.map((i) =>
-              i.id === item.id ? { ...i, status: 'error' } : i,
-            ),
-          }));
-          get().autoCluster();
-        });
-    }
+      set((s) => {
+        if (s.activeBoardId === boardId) {
+          return { images: [...s.images, ...items], dirty: true };
+        }
+        const snap = s.saved[boardId];
+        if (!snap) {
+          for (const item of items) if (item.url) URL.revokeObjectURL(item.url);
+          return {};
+        }
+        return {
+          saved: {
+            ...s.saved,
+            [boardId]: { ...snap, images: [...snap.images, ...items], dirty: true },
+          },
+        };
+      });
+
+      for (const item of items) {
+        if (item.status !== 'pending' || !item.file) continue;
+        embedder
+          .embed(item.id, item.file)
+          .then(({ clip, dino }) => {
+            set((s) =>
+              patchBoardImage(s, boardId, item.id, {
+                embedding: clip,
+                dinoEmbedding: dino,
+                status: 'ready',
+              }),
+            );
+            if (get().activeBoardId === boardId) get().autoCluster();
+          })
+          .catch(() => {
+            set((s) => patchBoardImage(s, boardId, item.id, { status: 'error' }));
+            if (get().activeBoardId === boardId) get().autoCluster();
+          });
+      }
+    })();
   },
 
   removeImage: (id) =>

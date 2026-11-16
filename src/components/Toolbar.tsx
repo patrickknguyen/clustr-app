@@ -35,7 +35,7 @@ export function Toolbar() {
         <input
           ref={inputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.heic,.heif,image/heic,image/heif"
           multiple
           hidden
           onChange={onPick}

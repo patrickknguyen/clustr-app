@@ -191,7 +191,11 @@ export function Stage() {
                   : { duration: 0, opacity: { duration: 0.2 } }
               }
             >
-              <img src={img.url} alt="" draggable={false} />
+              {img.url ? (
+                <img src={img.url} alt="" draggable={false} />
+              ) : (
+                <div className="thumb-error">Couldn't read</div>
+              )}
               {!isCluster && (
                 <button
                   className="thumb-x"
