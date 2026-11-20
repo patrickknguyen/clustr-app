@@ -5,7 +5,7 @@ grouping by subject, using CLIP, with grouping by look, using DINOv2, so the use
 the grouping that fits their board. Everything runs in the browser, with no server and no
 API keys.
 
-**[Live demo](https://patrickknguyen.github.io/clustr-app/)** · **[Case study](https://patrickknguyen.github.io/clustr/)**
+**[Live demo](https://clustr.design)** · **[Case study](https://patrickknguyen.github.io/clustr/)**
 
 https://github.com/user-attachments/assets/913bbfb0-6999-43e5-b779-1f5e3a4423af
 
