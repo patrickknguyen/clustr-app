@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MotionConfig } from 'motion/react';
 import { useStore } from './store';
 import { embedder } from './lib/embedder';
 import { TabBar } from './components/TabBar';
@@ -7,6 +8,8 @@ import { SampleBar } from './components/SampleBar';
 import { BoardBar } from './components/BoardBar';
 import { BlendSlider } from './components/BlendSlider';
 import { Stage } from './components/Stage';
+import { GalleryMode } from './components/GalleryMode';
+import { GALLERY } from './lib/gallery';
 import './App.css';
 
 export default function App() {
@@ -26,36 +29,40 @@ export default function App() {
   }, [initSamples]);
 
   return (
-    <div
-      className={`app ${dragging ? 'dragging' : ''}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragging(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragging(false);
-        addFiles(Array.from(e.dataTransfer.files));
-      }}
-    >
-      <header className="header">
-        <Toolbar />
-        <div className="subbar">
-          <TabBar />
-          <BoardBar />
-          <SampleBar />
-        </div>
-      </header>
+    // Honor the system's reduce-motion setting for every Motion animation.
+    <MotionConfig reducedMotion="user">
+      <div
+        className={`app ${GALLERY ? 'gallery' : ''} ${dragging ? 'dragging' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) setDragging(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          addFiles(Array.from(e.dataTransfer.files));
+        }}
+      >
+        <header className="header">
+          <Toolbar />
+          <div className="subbar">
+            <TabBar />
+            <BoardBar />
+            {!GALLERY && <SampleBar />}
+          </div>
+        </header>
 
-      <main className="stage">
-        <BlendSlider />
-        <Stage />
-      </main>
+        <main className="stage">
+          <BlendSlider />
+          <Stage />
+        </main>
 
-      {dragging && <div className="drop-overlay">Drop to add</div>}
-    </div>
+        {GALLERY && <GalleryMode />}
+        {dragging && <div className="drop-overlay">Drop to add</div>}
+      </div>
+    </MotionConfig>
   );
 }

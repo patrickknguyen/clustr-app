@@ -3,12 +3,17 @@ import { motion } from 'motion/react';
 import { useStore } from '../store';
 import { useElementSize } from '../hooks/useElementSize';
 import { fitToBox } from '../lib/layout';
+import { GALLERY } from '../lib/gallery';
 
 const CELL = 150; // base element size in px, about 8 images per row in the library
 const GAP = 12;
 const PAD = 16;
 const CLUSTER_SCALE = 0.5; // cluster thumbs are half the grid-cell size
 const CHIP_MIN_DIST = 48; // min gap between a cluster's tag chips (px)
+// The header sits above the stage, so the stage's true center reads low on the screen.
+// Centered text (the board's name, the empty state) rises by this much to look centered.
+const OPTICAL_LIFT = 40;
+const ARRIVAL_SCALE = 1.25; // a photo that just landed waits at the center at this size
 
 // Push a cluster's tag chips apart so ones on the same centroid don't stack.
 function spreadChips(chips: { word: string; x: number; y: number }[]) {
@@ -71,17 +76,19 @@ export function Stage() {
 
   const cols = Math.max(1, Math.floor((size.width - PAD * 2 + GAP) / (CELL + GAP)));
 
-  // Grid slot (top-left) per image, plus total scroll height.
+  // Grid slot (top-left) per image, plus total scroll height. The columns are centered, so
+  // the leftover width splits evenly instead of collecting on the right.
   const grid = useMemo(() => {
     const pos: Record<string, { x: number; y: number }> = {};
+    const left = Math.max(PAD, (size.width - (cols * (CELL + GAP) - GAP)) / 2);
     images.forEach((img, i) => {
       const c = i % cols;
       const r = Math.floor(i / cols);
-      pos[img.id] = { x: PAD + c * (CELL + GAP), y: PAD + r * (CELL + GAP) };
+      pos[img.id] = { x: left + c * (CELL + GAP), y: PAD + r * (CELL + GAP) };
     });
     const rows = Math.ceil(images.length / cols) || 1;
     return { pos, height: PAD * 2 + rows * (CELL + GAP) - GAP };
-  }, [images, cols]);
+  }, [images, cols, size.width]);
 
   // Cluster centers, mapped from the UMAP projection into the viewport.
   const clusterPos = useMemo(
@@ -131,17 +138,30 @@ export function Stage() {
       ? new Set(clusters[hovered].memberIds)
       : null;
 
+  // Gallery only: photos still being embedded wait large at the center of the map, so a
+  // visitor sees their AirDrop land before it flies off to join its group.
+  const arriving = useMemo(() => {
+    if (!GALLERY || !isCluster) return new Map<string, number>();
+    const ids = images
+      .filter((i) => i.status === 'pending' || (i.status === 'ready' && !clusterPos[i.id]))
+      .map((i) => i.id);
+    return new Map(ids.map((id, k) => [id, k]));
+  }, [isCluster, images, clusterPos]);
+
   // Board theme: a faint word pinned to the viewport center (only with 2+ clusters).
   const boardTheme = useMemo(() => {
     if (!isCluster || boardTags.length === 0 || clusters.length < 2) return null;
-    return { text: boardTags.join(' | '), x: size.width / 2, y: size.height / 2 };
+    return { text: boardTags.join(', '), x: size.width / 2, y: size.height / 2 - OPTICAL_LIFT };
   }, [isCluster, boardTags, clusters.length, size.width, size.height]);
 
   if (images.length === 0) {
     return (
       <div className="stage-scroll fit" ref={ref}>
         <div className="empty">
-          Drop images here, or use “Add images”. Then open the “Map”.
+          <div style={{ transform: `translateY(${-OPTICAL_LIFT}px)` }}>
+            <p className="empty-title">Add images to start a board</p>
+            <p className="empty-body">Drag and drop images here or use "Add images".</p>
+          </div>
         </div>
       </div>
     );
@@ -169,18 +189,33 @@ export function Stage() {
           const cp = clusterPos[img.id];
           const showCluster = isCluster && cp;
           const g = grid.pos[img.id];
-          const x = showCluster ? cp.x - CELL / 2 : g.x;
-          const y = showCluster ? cp.y - CELL / 2 : g.y;
-          const scale = showCluster ? CLUSTER_SCALE : 1;
-          const opacity =
-            isCluster && !cp ? 0 : dimSet && !dimSet.has(img.id) ? 0.12 : 1;
+          const slot = arriving.get(img.id);
+          const isArriving = slot !== undefined && img.status !== 'error';
+          // Several arrivals at once fan out slightly instead of stacking exactly.
+          const ax = size.width / 2 - CELL / 2 + slot! * 28;
+          const ay = size.height / 2 - CELL / 2 + slot! * 18;
+          const x = isArriving ? ax : showCluster ? cp.x - CELL / 2 : g.x;
+          const y = isArriving ? ay : showCluster ? cp.y - CELL / 2 : g.y;
+          const scale = isArriving ? ARRIVAL_SCALE : showCluster ? CLUSTER_SCALE : 1;
+          const opacity = isArriving
+            ? 1
+            : isCluster && !cp
+              ? 0
+              : dimSet && !dimSet.has(img.id)
+                ? 0.12
+                : 1;
 
           return (
             <motion.div
               key={img.id}
               className="thumb"
-              style={{ width: CELL, height: CELL }}
-              initial={false}
+              style={{ width: CELL, height: CELL, zIndex: isArriving ? 9 : undefined }}
+              initial={
+                // An upload that lands while the gallery map is open grows in from the center.
+                isArriving && img.status === 'pending'
+                  ? { x: ax, y: ay, scale: 0.4, opacity: 0 }
+                  : false
+              }
               animate={{ x, y, scale, opacity }}
               transition={
                 // Animate the grid-to-map morph, and the map-back-to-grid morph right
@@ -228,7 +263,7 @@ export function Stage() {
               }}
               transition={{ duration: 0.15 }}
             >
-              {l.words.join(' | ')}
+              {l.words.join(', ')}
             </motion.div>
           </motion.div>
         ))}

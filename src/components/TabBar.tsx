@@ -1,3 +1,4 @@
+import { motion } from 'motion/react';
 import { useStore } from '../store';
 
 export function TabBar() {
@@ -11,6 +12,7 @@ export function TabBar() {
   const readyCount = useStore(
     (s) => s.images.filter((i) => i.status === 'ready' && i.embedding).length,
   );
+  const pendingCount = useStore((s) => s.images.filter((i) => i.status === 'pending').length);
 
   return (
     <div className="tabbar" role="tablist">
@@ -21,6 +23,7 @@ export function TabBar() {
         onClick={() => setMode('grid')}
       >
         Library
+        {mode === 'grid' && <motion.span layoutId="tab-indicator" className="tab-indicator" />}
       </button>
       <button
         role="tab"
@@ -29,7 +32,12 @@ export function TabBar() {
         disabled={readyCount < 2}
         onClick={() => showClusters()}
       >
-        {isBusy ? 'Mapping…' : 'Map'}
+        {pendingCount > 0
+          ? `Mapping ${readyCount} of ${readyCount + pendingCount}…`
+          : isBusy
+            ? 'Mapping…'
+            : 'Map'}
+        {mode === 'cluster' && <motion.span layoutId="tab-indicator" className="tab-indicator" />}
       </button>
     </div>
   );

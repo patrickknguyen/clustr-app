@@ -67,3 +67,28 @@ export async function toDisplayableImage(file: File): Promise<File> {
     lastModified: file.lastModified,
   });
 }
+
+// Shrink a phone photo before it joins the board. Full-resolution photos are 12 to 48 MP,
+// and dozens of them animating at once would stutter on the gallery screen. The models
+// only see 224 px, so nothing is lost for grouping.
+export async function downscaleImage(file: File, maxDim = 1600): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const { width, height } = bitmap;
+    const s = Math.min(1, maxDim / Math.max(width, height));
+    if (s === 1) {
+      bitmap.close();
+      return file;
+    }
+    const canvas = new OffscreenCanvas(Math.round(width * s), Math.round(height * s));
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.88 });
+    return new File([blob], jpegName(file.name), {
+      type: 'image/jpeg',
+      lastModified: file.lastModified,
+    });
+  } catch {
+    return file;
+  }
+}

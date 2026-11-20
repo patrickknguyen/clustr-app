@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "build:samples": "tsx scripts/build-samples.ts",
-    "build:vocab": "tsx scripts/build-vocab.ts"
+    "build:vocab": "tsx scripts/build-vocab.ts",
+    "build:vocab-vectors": "tsx scripts/build-vocab-vectors.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

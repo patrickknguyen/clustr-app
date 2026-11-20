@@ -1,11 +1,10 @@
 import { useRef } from 'react';
 import { useStore } from '../store';
 
+// The wordmark and the upload action. The board's name lives in BoardBar, where it's renamed.
 export function Toolbar() {
   const inputRef = useRef<HTMLInputElement>(null);
   const addFiles = useStore((s) => s.addFiles);
-  const boardName = useStore((s) => s.boardName);
-  const setBoardName = useStore((s) => s.setBoardName);
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
@@ -14,22 +13,12 @@ export function Toolbar() {
 
   return (
     <div className="toolbar">
-      <div className="brand-group">
-        <img
-          className="brand"
-          src={`${import.meta.env.BASE_URL}clustr-wordmark.png`}
-          alt="clustr"
-          height="24"
-        />
-        <input
-          className="board-name"
-          type="text"
-          value={boardName}
-          placeholder="Untitled"
-          aria-label="Board name"
-          onChange={(e) => setBoardName(e.target.value)}
-        />
-      </div>
+      <img
+        className="brand"
+        src={`${import.meta.env.BASE_URL}clustr-wordmark.png`}
+        alt="clustr"
+        height="24"
+      />
 
       <div className="toolbar-actions">
         <input

@@ -3,10 +3,11 @@ import { embedder } from './lib/embedder';
 import { computeProjection } from './lib/cluster';
 import { alignToReference } from './lib/align';
 import { RAW } from './lib/raw';
+import { GALLERY, GALLERY_BOARD_NAME, GALLERY_SAMPLES } from './lib/gallery';
 import { blendVectors, dinoScale } from './lib/blend';
 import { groupAndLabel, boardIdentity } from './lib/labeling';
 import { VOCABULARY, LABEL_TEMPLATE } from './lib/vocabulary';
-import { STYLE_VOCABULARY } from './lib/style-vocabulary';
+import { STYLE_VOCABULARY, STYLE_TEMPLATE } from './lib/style-vocabulary';
 import { selectImages, toDisplayableImage } from './lib/images';
 import type { Cluster, ImageItem, Mode, Point } from './types';
 
@@ -43,7 +44,7 @@ function getStyleVocab() {
       )
       .catch(() =>
         embedder
-          .embedText(STYLE_VOCABULARY.map(LABEL_TEMPLATE))
+          .embedText(STYLE_VOCABULARY.map(STYLE_TEMPLATE))
           .then((vecs) => STYLE_VOCABULARY.map((word, i) => ({ word, vec: vecs[i] }))),
       )
       .catch(() => {
@@ -76,7 +77,8 @@ interface AppState {
   activeBoardId: string;
   saved: Record<string, BoardSnapshot>;
 
-  addFiles: (files: File[]) => void;
+  // boardId defaults to the active board. The gallery's AirDrop intake always targets the pinned board.
+  addFiles: (files: File[], boardId?: string) => void;
   removeImage: (id: string) => void;
   setMode: (mode: Mode) => void;
   setAlpha: (alpha: number) => void;
@@ -84,7 +86,8 @@ interface AppState {
   runCluster: () => Promise<void>;
   showClusters: () => Promise<void>;
   autoCluster: () => void;
-  loadSample: (id: string) => Promise<void>;
+  // In the gallery, a sample never overwrites the pinned board unless replace is set.
+  loadSample: (id: string, opts?: { replace?: boolean }) => Promise<void>;
   initSamples: () => Promise<void>;
   newBoard: () => void;
   switchBoard: (id: string) => void;
@@ -128,6 +131,21 @@ const captureBoard = (s: AppState): BoardSnapshot => ({
   projectionRef: s.projectionRef,
 });
 const INITIAL_BOARD_ID = 'board-1';
+// In the gallery, the first board holds tonight's photos. It can't be deleted or overwritten.
+export const PINNED_BOARD_ID = INITIAL_BOARD_ID;
+// The gallery's sample boards are pinned too, under ids made from their sample.
+const SAMPLE_BOARD_PREFIX = 'sample-';
+const sampleOfBoard = (id: string) =>
+  GALLERY && id.startsWith(SAMPLE_BOARD_PREFIX) ? id.slice(SAMPLE_BOARD_PREFIX.length) : null;
+export const isPinned = (id: string) =>
+  GALLERY && (id === PINNED_BOARD_ID || sampleOfBoard(id) !== null);
+const INITIAL_NAME = GALLERY ? GALLERY_BOARD_NAME : '';
+const INITIAL_BOARDS = [
+  { id: INITIAL_BOARD_ID, name: INITIAL_NAME },
+  ...(GALLERY
+    ? GALLERY_SAMPLES.map((s) => ({ id: SAMPLE_BOARD_PREFIX + s.sample, name: s.name }))
+    : []),
+];
 
 let autoClusterTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -155,10 +173,102 @@ function patchBoardImage(
   };
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>((set, get) => {
+  // One clustering pass for the active board. runCluster wraps it so an error can't leave
+  // the lock held.
+  const clusterPass = async () => {
+    set({ isClustering: true });
+    // Map whatever is ready now instead of waiting for every upload. Photos still embedding
+    // stay out of this pass, and each one that finishes calls autoCluster, so a burst of
+    // AirDrops joins the map one by one and one slow photo can't hold up the board.
+    await Promise.resolve();
+    // Clustering is async, and the board can switch or change while it runs. Remember what
+    // this pass is for, and only save the result if that still holds when it finishes.
+    const boardId = get().activeBoardId;
+    const ready = get().images.filter((i) => i.status === 'ready' && i.embedding);
+    if (ready.length < 2) {
+      set({ isClustering: false });
+      return;
+    }
+    const alpha = get().alpha;
+    const allHaveDino = ready.every((i) => i.dinoEmbedding);
+
+    // The reference frame is the pure-CLIP layout, computed once per image set and reused for every blend.
+    const ids = ready.map((i) => i.id);
+    const existing = get().projectionRef;
+    const sameSet =
+      existing !== null &&
+      ids.length === Object.keys(existing).length &&
+      ids.every((id) => existing[id]);
+    const reference = sameSet
+      ? existing!
+      : computeProjection(ready.map((i) => ({ id: i.id, embedding: i.embedding! })));
+
+    // Blend CLIP and DINO for the layout when every image has a DINO vector. Labels always use CLIP.
+    const projInput =
+      alpha > 0 && allHaveDino
+        ? blendVectors(
+            ready.map((i) => ({ id: i.id, clip: i.embedding!, dino: i.dinoEmbedding! })),
+            alpha,
+            dinoScale(
+              ready.map((i) => i.embedding!),
+              ready.map((i) => i.dinoEmbedding!),
+            ),
+          )
+        : ready.map((i) => ({ id: i.id, embedding: i.embedding! }));
+    const raw = computeProjection(projInput);
+    const projection = RAW ? raw : alignToReference(raw, reference);
+
+    const [vocab, styleVocab] = await Promise.all([getVocab(), getStyleVocab()]);
+
+    // Switched boards mid-pass: drop the result. switchBoard already freed the lock, and the
+    // board this was for stays dirty, so it reclusters when it's back in front.
+    if (get().activeBoardId !== boardId) return;
+    // Same board, different photos: drop the result and run again on what's there now.
+    const nowIds = get()
+      .images.filter((i) => i.status === 'ready' && i.embedding)
+      .map((i) => i.id);
+    if (nowIds.length !== ids.length || nowIds.some((id, k) => id !== ids[k])) {
+      set({ isClustering: false, dirty: true });
+      get().autoCluster();
+      return;
+    }
+    // Board identity is fixed per image set and independent of alpha, so the board name never drifts.
+    const boardTags =
+      sameSet && get().boardTags.length
+        ? get().boardTags
+        : boardIdentity(ready.map((i) => i.embedding!), vocab, styleVocab);
+    const { clusters } = groupAndLabel(
+      ready.map((i) => ({
+        id: i.id,
+        embedding: i.embedding!,
+        coord: projection[i.id],
+      })),
+      vocab,
+      styleVocab,
+      alpha,
+      boardTags,
+    );
+    set({
+      projection,
+      projectionRef: reference,
+      clusters,
+      boardTags,
+      hasClustered: true,
+      dirty: false,
+      isClustering: false,
+    });
+    // Auto-name the board from its theme, unless the user already named it.
+    if (!get().boardName.trim() && boardTags.length) {
+      const title = boardTags.map((w) => w.replace(/\b\w/g, (c) => c.toUpperCase())).join(' ');
+      get().setBoardName(title);
+    }
+  };
+
+  return {
   images: [],
   mode: 'grid',
-  boardName: '',
+  boardName: INITIAL_NAME,
   hasClustered: false,
   isClustering: false,
   projection: {},
@@ -168,12 +278,12 @@ export const useStore = create<AppState>((set, get) => ({
   dirty: false,
   alpha: 0,
   projectionRef: null,
-  boards: [{ id: INITIAL_BOARD_ID, name: '' }],
+  boards: INITIAL_BOARDS,
   activeBoardId: INITIAL_BOARD_ID,
   saved: {},
 
-  addFiles: (files) => {
-    const boardId = get().activeBoardId;
+  addFiles: (files, target) => {
+    const boardId = target ?? get().activeBoardId;
     void (async () => {
       const accepted = await selectImages(files);
       if (accepted.length === 0) return;
@@ -279,79 +389,23 @@ export const useStore = create<AppState>((set, get) => ({
       boards: s.boards.map((b) => (b.id === s.activeBoardId ? { ...b, name } : b)),
     })),
 
+  // Any error mid-pass must still release the lock, or the board stays on "Mapping…" for
+  // good and every later photo piles up unmapped.
   runCluster: async () => {
     if (get().isClustering) return;
-    set({ isClustering: true });
-    // Wait for any in-flight embeddings so none get dropped.
-    await embedder.whenIdle();
-    const ready = get().images.filter((i) => i.status === 'ready' && i.embedding);
-    if (ready.length < 2) {
+    try {
+      await clusterPass();
+    } catch (e) {
+      console.error('clustering failed', e);
       set({ isClustering: false });
-      return;
-    }
-    const alpha = get().alpha;
-    const allHaveDino = ready.every((i) => i.dinoEmbedding);
-
-    // The reference frame is the pure-CLIP layout, computed once per image set and reused for every blend.
-    const ids = ready.map((i) => i.id);
-    const existing = get().projectionRef;
-    const sameSet =
-      existing !== null &&
-      ids.length === Object.keys(existing).length &&
-      ids.every((id) => existing[id]);
-    const reference = sameSet
-      ? existing!
-      : computeProjection(ready.map((i) => ({ id: i.id, embedding: i.embedding! })));
-    if (!sameSet) set({ projectionRef: reference });
-
-    // Blend CLIP and DINO for the layout when every image has a DINO vector. Labels always use CLIP.
-    const projInput =
-      alpha > 0 && allHaveDino
-        ? blendVectors(
-            ready.map((i) => ({ id: i.id, clip: i.embedding!, dino: i.dinoEmbedding! })),
-            alpha,
-            dinoScale(
-              ready.map((i) => i.embedding!),
-              ready.map((i) => i.dinoEmbedding!),
-            ),
-          )
-        : ready.map((i) => ({ id: i.id, embedding: i.embedding! }));
-    const raw = computeProjection(projInput);
-    const projection = RAW ? raw : alignToReference(raw, reference);
-
-    const [vocab, styleVocab] = await Promise.all([getVocab(), getStyleVocab()]);
-    // Board identity is fixed per image set and independent of alpha, so the board name never drifts.
-    const boardTags =
-      sameSet && get().boardTags.length
-        ? get().boardTags
-        : boardIdentity(ready.map((i) => i.embedding!), vocab, styleVocab);
-    const { clusters } = groupAndLabel(
-      ready.map((i) => ({
-        id: i.id,
-        embedding: i.embedding!,
-        coord: projection[i.id],
-      })),
-      vocab,
-      styleVocab,
-      alpha,
-      boardTags,
-    );
-    set({
-      projection,
-      clusters,
-      boardTags,
-      hasClustered: true,
-      dirty: false,
-      isClustering: false,
-    });
-    // Auto-name the board from its theme, unless the user already named it.
-    if (!get().boardName.trim() && boardTags.length) {
-      const title = boardTags.map((w) => w.replace(/\b\w/g, (c) => c.toUpperCase())).join(' ');
-      get().setBoardName(title);
     }
   },
-
-  loadSample: async (id) => {
+  loadSample: async (id, opts) => {
+    // Keep tonight's photos safe: a sample never lands on the gallery board by accident.
+    if (get().activeBoardId === PINNED_BOARD_ID && GALLERY && !opts?.replace) get().newBoard();
+    // The fetch is async. If the board changes before it returns, drop the result instead
+    // of filling whichever board is in front by then.
+    const boardId = get().activeBoardId;
     const base = import.meta.env.BASE_URL;
     let board: { images: { file: string; embedding: number[]; dino?: number[] }[] };
     try {
@@ -359,6 +413,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       return;
     }
+    if (get().activeBoardId !== boardId) return;
     // Free object URLs from any uploaded images (samples use plain paths).
     for (const img of get().images) if (img.file) URL.revokeObjectURL(img.url);
 
@@ -369,10 +424,13 @@ export const useStore = create<AppState>((set, get) => ({
       dinoEmbedding: im.dino ? Float32Array.from(im.dino) : undefined,
       status: 'ready' as const,
     }));
+    // Pinned gallery boards keep their names. Any other board is renamed from its theme.
     set((s) => ({
       images,
-      boardName: '',
-      boards: s.boards.map((b) => (b.id === s.activeBoardId ? { ...b, name: '' } : b)),
+      boardName: isPinned(s.activeBoardId) ? s.boardName : '',
+      boards: s.boards.map((b) =>
+        b.id === s.activeBoardId && !isPinned(b.id) ? { ...b, name: '' } : b,
+      ),
       projection: {},
       projectionRef: null,
       clusters: [],
@@ -415,14 +473,29 @@ export const useStore = create<AppState>((set, get) => ({
       saved: { ...s.saved, [s.activeBoardId]: captureBoard(s) },
       activeBoardId: id,
       isClustering: false,
-      ...(s.saved[id] ?? EMPTY_BOARD),
+      // A board never opened before starts empty but keeps the name it was listed under.
+      ...(s.saved[id] ?? { ...EMPTY_BOARD, boardName: s.boards.find((b) => b.id === id)?.name ?? '' }),
     });
+    // The gallery lives on the map: a board with photos opens there. Otherwise, photos can
+    // land on a board while it's in the background, like AirDrops to the gallery board, so
+    // recluster once it's back in front.
+    if (GALLERY) void get().showClusters();
+    else if (get().dirty) get().autoCluster();
+    // A pinned sample board loads its photos the first time it's opened, onto the map.
+    const sample = sampleOfBoard(id);
+    if (sample && get().images.length === 0) {
+      void get()
+        .loadSample(sample, { replace: true })
+        .then(() => {
+          if (get().activeBoardId === id) return get().showClusters();
+        });
+    }
   },
 
   // Remove a board, always keeping at least one. Free its object URLs, and if it was active fall back to a neighbour.
   deleteBoard: (id) => {
     const s = get();
-    if (s.boards.length <= 1) return;
+    if (s.boards.length <= 1 || isPinned(id)) return;
     const snapshot = id === s.activeBoardId ? captureBoard(s) : s.saved[id];
     if (snapshot) for (const img of snapshot.images) if (img.file) URL.revokeObjectURL(img.url);
 
@@ -441,4 +514,5 @@ export const useStore = create<AppState>((set, get) => ({
       ...(saved[nextId] ?? EMPTY_BOARD),
     });
   },
-}));
+};
+});

@@ -14,6 +14,13 @@ export function computeProjection(
     out[items[0].id] = { x: 0, y: 0 };
     return out;
   }
+  // UMAP needs more points than neighbors, and at least 2 neighbors, so it throws on 2.
+  // Two photos simply sit side by side.
+  if (n === 2) {
+    out[items[0].id] = { x: -1, y: 0 };
+    out[items[1].id] = { x: 1, y: 0 };
+    return out;
+  }
 
   const vectors = items.map((i) => Array.from(i.embedding));
   const nNeighbors = Math.max(2, Math.min(15, n - 1));

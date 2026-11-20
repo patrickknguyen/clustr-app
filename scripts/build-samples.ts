@@ -24,7 +24,7 @@ import { readdir, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, parse } from 'node:path';
 import { VOCABULARY, LABEL_TEMPLATE } from '../src/lib/vocabulary';
-import { STYLE_VOCABULARY } from '../src/lib/style-vocabulary';
+import { STYLE_VOCABULARY, STYLE_TEMPLATE } from '../src/lib/style-vocabulary';
 
 const MODEL_ID = 'Xenova/clip-vit-base-patch32';
 const DINO_ID = 'Xenova/dinov2-small'; // ViT-S/14, 384-D CLS token — visual "by look" features
@@ -115,8 +115,8 @@ async function main() {
   const textModel = await CLIPTextModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'fp32' });
   // Embed a word list through the CLIP text tower; rounds to 4 decimals (plenty for
   // cosine ranking, keeps the shipped file small).
-  async function embedVocab(words: string[]) {
-    const inputs = tokenizer(words.map(LABEL_TEMPLATE), { padding: true, truncation: true });
+  async function embedVocab(words: string[], template = LABEL_TEMPLATE) {
+    const inputs = tokenizer(words.map(template), { padding: true, truncation: true });
     const { text_embeds } = await textModel(inputs);
     const [, dim] = text_embeds.dims as [number, number];
     const flat = text_embeds.data as Float32Array;
@@ -126,7 +126,7 @@ async function main() {
     }));
   }
   await writeFile('public/vocab.json', JSON.stringify(await embedVocab(VOCABULARY)));
-  await writeFile('public/style-vocab.json', JSON.stringify(await embedVocab(STYLE_VOCABULARY)));
+  await writeFile('public/style-vocab.json', JSON.stringify(await embedVocab(STYLE_VOCABULARY, STYLE_TEMPLATE)));
 
   console.log(`done — ${boards.length} board(s), ${VOCABULARY.length} subject + ${STYLE_VOCABULARY.length} style words.`);
 }
